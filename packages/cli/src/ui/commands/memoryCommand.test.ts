@@ -109,13 +109,44 @@ describe('memoryCommand', () => {
 
     beforeEach(() => {
       addCommand = getSubCommand('add');
-      mockContext = createMockCommandContext();
+
+      const mockConfig = {
+        getWorkingDir: () => '/test/dir',
+        getDebugMode: () => false,
+        getFileService: () => ({}) as FileDiscoveryService,
+        getExtensionContextFilePaths: () => [],
+        shouldLoadMemoryFromIncludeDirectories: () => false,
+        getWorkspaceContext: () => ({
+          getDirectories: () => [],
+        }),
+        getFileFilteringOptions: () => ({
+          ignore: [],
+          include: [],
+        }),
+        getFolderTrust: () => true,
+      };
+
+      mockContext = createMockCommandContext({
+        services: {
+          config: Promise.resolve(mockConfig),
+          settings: {
+            merged: {
+              context: {
+                importFormat: 'tree',
+                discoveryMaxDirs: 200,
+              },
+            },
+          } as LoadedSettings,
+        },
+      });
+
+      mockLoadServerHierarchicalMemory.mockClear();
     });
 
-    it('should return an error message if no arguments are provided', () => {
+    it('should return an error message if no arguments are provided', async () => {
       if (!addCommand.action) throw new Error('Command has no action');
 
-      const result = addCommand.action(mockContext, '  ');
+      const result = await addCommand.action(mockContext, '  ');
       expect(result).toEqual({
         type: 'message',
         messageType: 'error',
@@ -125,11 +156,18 @@ describe('memoryCommand', () => {
       expect(mockContext.ui.addItem).not.toHaveBeenCalled();
     });
 
-    it('should return a tool action and add an info message when arguments are provided', () => {
+    it('should return a tool action with targetFile when single file exists', async () => {
       if (!addCommand.action) throw new Error('Command has no action');
 
+      const singleFilePath = '/project/GEMINI.md';
+      mockLoadServerHierarchicalMemory.mockResolvedValue({
+        memoryContent: 'content',
+        fileCount: 1,
+        filePaths: [singleFilePath],
+      });
+
       const fact = 'remember this';
-      const result = addCommand.action(mockContext, `  ${fact}  `);
+      const result = await addCommand.action(mockContext, `  ${fact}  `);
 
       expect(mockContext.ui.addItem).toHaveBeenCalledWith(
         {
@@ -142,7 +180,54 @@ describe('memoryCommand', () => {
       expect(result).toEqual({
         type: 'tool',
         toolName: 'save_memory',
-        toolArgs: { fact },
+        toolArgs: {
+          fact,
+          targetFile: singleFilePath,
+        },
+      });
+    });
+
+    it('should show file selection info when multiple files exist', async () => {
+      if (!addCommand.action) throw new Error('Command has no action');
+
+      const filePaths = ['/project/GEMINI.md', '/home/user/.gemini/GEMINI.md'];
+      mockLoadServerHierarchicalMemory.mockResolvedValue({
+        memoryContent: 'content',
+        fileCount: 2,
+        filePaths,
+      });
+
+      const fact = 'remember this';
+      const result = await addCommand.action(mockContext, `  ${fact}  `);
+
+      // Should display multiple file selection message
+      expect(mockContext.ui.addItem).toHaveBeenCalledWith(
+        {
+          type: MessageType.INFO,
+          text: 'Multiple GEMINI.md files found. Please select which file to save to:',
+        },
+        expect.any(Number),
+      );
+
+      // Should display file options
+      filePaths.forEach((fp, index) => {
+        expect(mockContext.ui.addItem).toHaveBeenCalledWith(
+          {
+            type: MessageType.INFO,
+            text: `${index + 1}. ${fp}`,
+          },
+          expect.any(Number),
+        );
+      });
+
+      // Should default to first file
+      expect(result).toEqual({
+        type: 'tool',
+        toolName: 'save_memory',
+        toolArgs: {
+          fact,
+          targetFile: filePaths[0],
+        },
       });
     });
   });

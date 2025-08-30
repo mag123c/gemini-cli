@@ -94,11 +94,15 @@ export function getAllGeminiMdFilenames(): string[] {
 
 interface SaveMemoryParams {
   fact: string;
+  targetFile?: string;
   modified_by_user?: boolean;
   modified_content?: string;
 }
 
-function getGlobalMemoryFilePath(): string {
+function getGlobalMemoryFilePath(targetFile?: string): string {
+  if (targetFile) {
+    return targetFile;
+  }
   return path.join(Storage.getGlobalGeminiDir(), getCurrentGeminiMdFilename());
 }
 
@@ -117,9 +121,9 @@ function ensureNewlineSeparation(currentContent: string): string {
 /**
  * Reads the current content of the memory file
  */
-async function readMemoryFileContent(): Promise<string> {
+async function readMemoryFileContent(targetFile?: string): Promise<string> {
   try {
-    return await fs.readFile(getGlobalMemoryFilePath(), 'utf-8');
+    return await fs.readFile(getGlobalMemoryFilePath(targetFile), 'utf-8');
   } catch (err) {
     const error = err as Error & { code?: string };
     if (!(error instanceof Error) || error.code !== 'ENOENT') throw err;
@@ -178,21 +182,21 @@ class MemoryToolInvocation extends BaseToolInvocation<
   private static readonly allowlist: Set<string> = new Set();
 
   getDescription(): string {
-    const memoryFilePath = getGlobalMemoryFilePath();
+    const memoryFilePath = getGlobalMemoryFilePath(this.params.targetFile);
     return `in ${tildeifyPath(memoryFilePath)}`;
   }
 
   override async shouldConfirmExecute(
     _abortSignal: AbortSignal,
   ): Promise<ToolEditConfirmationDetails | false> {
-    const memoryFilePath = getGlobalMemoryFilePath();
+    const memoryFilePath = getGlobalMemoryFilePath(this.params.targetFile);
     const allowlistKey = memoryFilePath;
 
     if (MemoryToolInvocation.allowlist.has(allowlistKey)) {
       return false;
     }
 
-    const currentContent = await readMemoryFileContent();
+    const currentContent = await readMemoryFileContent(this.params.targetFile);
     const newContent = computeNewContent(currentContent, this.params.fact);
 
     const fileName = path.basename(memoryFilePath);
@@ -223,19 +227,17 @@ class MemoryToolInvocation extends BaseToolInvocation<
   }
 
   async execute(_signal: AbortSignal): Promise<ToolResult> {
-    const { fact, modified_by_user, modified_content } = this.params;
+    const { fact, targetFile, modified_by_user, modified_content } =
+      this.params;
 
     try {
       if (modified_by_user && modified_content !== undefined) {
         // User modified the content in external editor, write it directly
-        await fs.mkdir(path.dirname(getGlobalMemoryFilePath()), {
+        const memoryFilePath = getGlobalMemoryFilePath(targetFile);
+        await fs.mkdir(path.dirname(memoryFilePath), {
           recursive: true,
         });
-        await fs.writeFile(
-          getGlobalMemoryFilePath(),
-          modified_content,
-          'utf-8',
-        );
+        await fs.writeFile(memoryFilePath, modified_content, 'utf-8');
         const successMessage = `Okay, I've updated the memory file with your modifications.`;
         return {
           llmContent: JSON.stringify({
@@ -246,15 +248,12 @@ class MemoryToolInvocation extends BaseToolInvocation<
         };
       } else {
         // Use the normal memory entry logic
-        await MemoryTool.performAddMemoryEntry(
-          fact,
-          getGlobalMemoryFilePath(),
-          {
-            readFile: fs.readFile,
-            writeFile: fs.writeFile,
-            mkdir: fs.mkdir,
-          },
-        );
+        const memoryFilePath = getGlobalMemoryFilePath(targetFile);
+        await MemoryTool.performAddMemoryEntry(fact, memoryFilePath, {
+          readFile: fs.readFile,
+          writeFile: fs.writeFile,
+          mkdir: fs.mkdir,
+        });
         const successMessage = `Okay, I've remembered that: "${fact}"`;
         return {
           llmContent: JSON.stringify({
@@ -355,11 +354,12 @@ export class MemoryTool
 
   getModifyContext(_abortSignal: AbortSignal): ModifyContext<SaveMemoryParams> {
     return {
-      getFilePath: (_params: SaveMemoryParams) => getGlobalMemoryFilePath(),
-      getCurrentContent: async (_params: SaveMemoryParams): Promise<string> =>
-        readMemoryFileContent(),
+      getFilePath: (params: SaveMemoryParams) =>
+        getGlobalMemoryFilePath(params.targetFile),
+      getCurrentContent: async (params: SaveMemoryParams): Promise<string> =>
+        readMemoryFileContent(params.targetFile),
       getProposedContent: async (params: SaveMemoryParams): Promise<string> => {
-        const currentContent = await readMemoryFileContent();
+        const currentContent = await readMemoryFileContent(params.targetFile);
         return computeNewContent(currentContent, params.fact);
       },
       createUpdatedParams: (

@@ -194,6 +194,30 @@ describe('MemoryTool', () => {
     });
   });
 
+  describe('performAddMemoryEntry with targetFile', () => {
+    it('should use provided targetFile path', async () => {
+      const targetFilePath = '/custom/path/GEMINI.md';
+      mockFsAdapter.readFile.mockRejectedValue({ code: 'ENOENT' });
+      const fact = 'Custom path fact';
+
+      await MemoryTool.performAddMemoryEntry(
+        fact,
+        targetFilePath,
+        mockFsAdapter,
+      );
+
+      expect(mockFsAdapter.mkdir).toHaveBeenCalledWith(
+        path.dirname(targetFilePath),
+        { recursive: true },
+      );
+      expect(mockFsAdapter.writeFile).toHaveBeenCalledWith(
+        targetFilePath,
+        `${MEMORY_SECTION_HEADER}\n- ${fact}\n`,
+        'utf-8',
+      );
+    });
+  });
+
   describe('execute (instance method)', () => {
     let memoryTool: MemoryTool;
     let performAddMemoryEntrySpy: Mock<typeof MemoryTool.performAddMemoryEntry>;
@@ -252,6 +276,31 @@ describe('MemoryTool', () => {
         params.fact,
         expectedFilePath,
         expectedFsArgument,
+      );
+      const successMessage = `Okay, I've remembered that: "${params.fact}"`;
+      expect(result.llmContent).toBe(
+        JSON.stringify({ success: true, message: successMessage }),
+      );
+      expect(result.returnDisplay).toBe(successMessage);
+    });
+
+    it('should use targetFile when provided', async () => {
+      const targetFilePath = '/project/docs/GEMINI.md';
+      const params = {
+        fact: 'Project specific fact',
+        targetFile: targetFilePath,
+      };
+      const invocation = memoryTool.build(params);
+      const result = await invocation.execute(mockAbortSignal);
+
+      expect(performAddMemoryEntrySpy).toHaveBeenCalledWith(
+        params.fact,
+        targetFilePath,
+        {
+          readFile: fs.readFile,
+          writeFile: fs.writeFile,
+          mkdir: fs.mkdir,
+        },
       );
       const successMessage = `Okay, I've remembered that: "${params.fact}"`;
       expect(result.llmContent).toBe(

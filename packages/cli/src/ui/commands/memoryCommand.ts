@@ -43,13 +43,84 @@ export const memoryCommand: SlashCommand = {
       name: 'add',
       description: 'Add content to the memory.',
       kind: CommandKind.BUILT_IN,
-      action: (context, args): SlashCommandActionReturn | void => {
+      action: async (
+        context,
+        args,
+      ): Promise<SlashCommandActionReturn | void> => {
         if (!args || args.trim() === '') {
           return {
             type: 'message',
             messageType: 'error',
             content: 'Usage: /memory add <text to remember>',
           };
+        }
+
+        // Get all available GEMINI.md files
+        const config = await context.services.config;
+        if (!config) {
+          return {
+            type: 'message',
+            messageType: 'error',
+            content: 'Configuration not available',
+          };
+        }
+
+        const { filePaths } = await loadServerHierarchicalMemory(
+          config.getWorkingDir(),
+          config.shouldLoadMemoryFromIncludeDirectories()
+            ? config.getWorkspaceContext().getDirectories()
+            : [],
+          config.getDebugMode(),
+          config.getFileService(),
+          config.getExtensionContextFilePaths(),
+          config.getFolderTrust(),
+          context.services.settings.merged.context?.importFormat || 'tree',
+          config.getFileFilteringOptions(),
+          context.services.settings.merged.context?.discoveryMaxDirs,
+        );
+
+        let selectedFile: string | undefined;
+
+        // If multiple files exist, prompt for selection
+        if (filePaths && filePaths.length > 1) {
+          const fileOptions = filePaths.map((fp, index) => ({
+            label: `${index + 1}. ${fp}`,
+            value: fp,
+          }));
+
+          // Prompt user to select a file
+          context.ui.addItem(
+            {
+              type: MessageType.INFO,
+              text: 'Multiple GEMINI.md files found. Please select which file to save to:',
+            },
+            Date.now(),
+          );
+
+          // Display options to user
+          fileOptions.forEach((option) => {
+            context.ui.addItem(
+              {
+                type: MessageType.INFO,
+                text: option.label,
+              },
+              Date.now(),
+            );
+          });
+
+          // For now, we'll default to the first file
+          // In a full implementation, this would need to integrate with the UI's selection mechanism
+          selectedFile = filePaths[0];
+
+          context.ui.addItem(
+            {
+              type: MessageType.INFO,
+              text: `Using default file: ${selectedFile}`,
+            },
+            Date.now(),
+          );
+        } else if (filePaths && filePaths.length === 1) {
+          selectedFile = filePaths[0];
         }
 
         context.ui.addItem(
@@ -63,7 +134,10 @@ export const memoryCommand: SlashCommand = {
         return {
           type: 'tool',
           toolName: 'save_memory',
-          toolArgs: { fact: args.trim() },
+          toolArgs: {
+            fact: args.trim(),
+            targetFile: selectedFile,
+          },
         };
       },
     },
